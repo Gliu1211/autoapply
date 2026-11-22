@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { --text: #15181d; --muted: #606874; --line: #e4e7ec; --accent: #3b5bdb; --good: #12805c; --warn: #b7600b; --bad: #c92a2a; --bg: #fff; --panel2: #f1f3f6; }
+    @media (prefers-color-scheme: dark) { :root { --text: #e7e9ee; --muted: #9aa2b1; --line: #262b35; --accent: #7b93ff; --good: #4cc79a; --warn: #f0a44b; --bad: #ff7b7b; --bg: #161920; --panel2: #1c2029; } }
+    body { margin: 0; width: 300px; font: 13px/1.45 "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
+    .wrap { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .h { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; }
+    .logo { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: grid; place-items: center; }
+    .muted { color: var(--muted); } .small { font-size: 12px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; }
+    .stats div { padding: 8px 10px; border-right: 1px solid var(--line); } .stats div:last-child { border-right: 0; }
+    .stats b { display: block; font-size: 18px; font-weight: 600; }
+    button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px 10px; cursor: pointer; width: 100%; text-align: center; }
+    button:hover { background: var(--panel2); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .toggle { width: 36px; height: 20px; border-radius: 10px; background: var(--line); position: relative; border: 0; padding: 0; flex-shrink: 0; }
+    .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+    .toggle.on { background: var(--good); } .toggle.on::after { left: 19px; }
+    .msg { font-size: 12px; } .msg.bad { color: var(--bad); } .msg.good { color: var(--good); } .msg.warn { color: var(--warn); }
+    a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="h">
+      <span class="logo"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg></span>
+      <span id="title">AutoApply</span>
+    </div>
+    <div id="offline" class="msg bad" hidden>AutoApply isn't running on this computer. Start it with <b>start.ps1</b>, then reopen this.</div>
+    <div id="online" hidden>
+      <div class="stats" style="margin-bottom:10px">
+        <div><b id="today">0</b><span class="small muted">sent today</span></div>
+        <div><b id="week">0</b><span class="small muted">this week</span></div>
+        <div><b id="needs">0</b><span class="small muted">need you</span></div>
+      </div>
+      <div id="missing" class="msg warn" hidden style="margin-bottom:8px"></div>
+      <div class="row" style="margin-bottom:10px"><button id="auto" class="toggle" role="switch" aria-label="Autopilot"></button><span id="autoLabel" class="small"></span></div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button id="fill" class="primary">Fill this application</button>
+        <button id="later">Apply to this job later</button>
+        <div id="status" class="msg"></div>
+        <div class="small muted">Filling happens here in your browser with your sign-ins. You review it and press Submit. <a id="dash">Open dashboard</a></div>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
