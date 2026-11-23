@@ -89,3 +89,7 @@ data/                your database, resumes, screenshots, browser profile (local
 
 Development: `.venv\Scripts\python backend\run.py` and, for live UI edits, `cd frontend; npm run dev`
 (http://127.0.0.1:5173, proxies to the API).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
