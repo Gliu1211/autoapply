@@ -305,5 +305,38 @@ SUCCESS_RE = (r"thank(s| you)\s+(so much\s+)?for\s+(applying|your application|yo
               r"successfully\s+(submitted|applied)|you('ve| have)\s+(successfully\s+)?applied|"
               r"your application (is|has been) (on its way|submitted|received)|congratulations.*submitted")
 CODE_PROMPT_RE = r"(security|verification|confirmation)\s+code|enter\s+the\s+(\d+-character\s+)?code|code\s+(was\s+)?sent\s+to"
+
+# Every visible, typeable text input with what it says about itself (label, name, id, placeholder, autocomplete,
+# and the label of a surrounding group, for one-character boxes). Python decides which one wants the emailed code.
+CODE_INPUTS_JS = r"""
+() => {
+  window.__aaN = window.__aaN || 0;
+  window.__aaDoc = window.__aaDoc || Math.random().toString(36).slice(2);   // tells a new page's inputs from the old one's
+  const tag = el => { if (!el.dataset.aa) el.dataset.aa = String(++window.__aaN); return el.dataset.aa; };
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const vis = el => {
+    const st = getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const text = el => el ? norm(el.innerText || el.textContent).slice(0, 120) : '';
+  const byIds = ids => (ids || '').split(/\s+/).filter(Boolean).map(id => text(document.getElementById(id))).join(' ');
+  const out = [];
+  for (const el of document.querySelectorAll('input')) {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    if (!['text', 'tel', 'number', 'password', 'search', ''].includes(type) || el.disabled || el.readOnly || !vis(el)) continue;
+    const lab = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+    const grp = el.closest('[role=group], fieldset, [aria-label], [aria-labelledby]');
+    const grpLabel = grp && grp !== el ? norm(grp.getAttribute('aria-label')) || byIds(grp.getAttribute('aria-labelledby'))
+                                         || text(grp.querySelector('legend')) : '';
+    const hint = norm([text(lab), text(el.closest('label')), el.getAttribute('aria-label'), byIds(el.getAttribute('aria-labelledby')),
+                       el.placeholder, el.name, el.id, el.getAttribute('data-testid'), grpLabel].filter(Boolean).join(' | '));
+    out.push({id: tag(el), doc: window.__aaDoc, maxlength: el.maxLength > 0 ? el.maxLength : null, value: el.value,
+              ac: (el.getAttribute('autocomplete') || '').toLowerCase(), hint});
+  }
+  return out;
+}
+"""
 SUBMIT_RE = r"^(submit|submit application|submit your application|send application|apply|apply now|finish|complete application|submit my application|confirm and submit)$"
 NEXT_RE = r"^(next|continue|save and continue|save & continue|next step|proceed|review|review application|continue to next step)$"
