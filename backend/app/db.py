@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   input INTEGER, output INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL
 );
 
+CREATE TABLE IF NOT EXISTS companies (
+  key TEXT PRIMARY KEY, name TEXT, types TEXT DEFAULT '[]', source TEXT, updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, t TEXT, kind TEXT, msg TEXT
 );
@@ -115,6 +119,8 @@ def conn() -> sqlite3.Connection:
             jcols = {r[1] for r in _conn.execute("PRAGMA table_info(jobs)")}
             if "role_rank" not in jcols:  # position of the highest-priority role the title matches (0 = first)
                 _conn.execute("ALTER TABLE jobs ADD COLUMN role_rank INTEGER")
+            if "company_rank" not in jcols:  # position of the company's best type in your list (NULL = not sorted yet)
+                _conn.execute("ALTER TABLE jobs ADD COLUMN company_rank INTEGER")
         return _conn
 
 

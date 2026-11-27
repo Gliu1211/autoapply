@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db, inbox, llm, matching, outreach
+from . import companies, db, inbox, llm, matching, outreach
 from . import profile as prof
 from . import settings as cfg
 from .autopilot import STATE, worker
@@ -30,6 +30,7 @@ async def lifespan(_: FastAPI):
     seed_boards()
     worker.start()
     yield
+    worker.stopping = True     # shutting down: don't start more applications while the browser goes away
 
 
 app = FastAPI(title="AutoApply", lifespan=lifespan)
@@ -244,12 +245,17 @@ def jobs(status: str = "matched", q: str = "", limit: int = 200, offset: int = 0
         params += [f"%{q}%"] * 3
     w = " AND ".join(where) or "1=1"
     rows = db.q(f"SELECT id, company, title, location, remote, url, ats, source, score, score_reason, status, filter_reason, "
-                f"posted_at, salary, role_rank FROM jobs WHERE {w} ORDER BY {matching.order_sql(s)}, COALESCE(score,-1) DESC, "
-                f"COALESCE(posted_at,'') DESC LIMIT ? OFFSET ?", params + [limit, offset])
+                f"posted_at, salary, role_rank, company_rank FROM jobs WHERE {w} ORDER BY {matching.order_sql(s)}, "
+                f"COALESCE(score,-1) DESC, COALESCE(posted_at,'') DESC LIMIT ? OFFSET ?", params + [limit, offset])
     roles = prof.get()["looking_for"].get("roles") or []
+    known = companies.stored()
+    only = len(matching.wanted_types(s)) if s.get("company_types_only") else 0
     for r in rows:
         rk = r.get("role_rank")
         r["role"] = roles[rk] if isinstance(rk, int) and rk < len(roles) else None
+        r["company_types"] = [companies.TYPES[t][0] for t in companies.types_for(r["company"], known) or []]
+        cr = r.pop("company_rank", None)
+        r["off_type"] = bool(only and cr is not None and cr >= only)   # skipped: not one of your company types
     counts = {r["status"]: r["n"] for r in db.q("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")}
     return {"jobs": rows, "counts": counts}
 
@@ -345,12 +351,17 @@ def get_settings():
     return {"settings": cfg.get(), "gmail": inbox.status(),
             "account_password": cfg.account_password(), "llm": llm.available(),
             "accounts": db.q("SELECT host, email, created_at, verified FROM accounts ORDER BY created_at DESC"),
-            "boards": boards}
+            "boards": boards, "company_types": companies.summary()}
 
 
 @app.put("/api/settings")
 def put_settings(body: dict = Body(...)):
     s = cfg.update(body)
+    if {"company_types", "company_types_only"} & body.keys():
+        matching.update_company_ranks(s)       # with what's already sorted; new companies are sorted in the background
+        matching.unqueue_unwanted(s)
+        if matching.wanted_types(s):
+            worker.submit(matching.refresh_company_types())
     worker.kick()
     return {"settings": s}
 

@@ -27,8 +27,11 @@ DEFAULTS: dict[str, Any] = {
     "cost_mode": "balanced",       # quality = Opus for everything; balanced = Haiku scores jobs and sorts email; saver = + Sonnet writes answers
     # Where to apply first. Among jobs that clear min_match, earlier sites are scored, queued and sent first.
     "source_priority": ["handshake", "greenhouse", "workday", "ashby", "workable", "lever"],
-    # Which wins when the two orders disagree: "role" (your role order, then sites) or "site" (sites, then roles).
-    "priority_first": "role",
+    # Kinds of company you want, most wanted first (keys of companies.TYPES); [] = no preference.
+    "company_types": [],
+    "company_types_only": False,   # True = skip companies of other types; False = apply to them after these
+    # Which order wins when they disagree: your roles, company types, or sites (Where to look).
+    "priority_order": ["role", "company", "site"],
     "sources": {
         "greenhouse": True, "lever": False, "ashby": True, "workable": True, "workday": True,   # Lever: bot CAPTCHAs
         "simplify_feeds": True, "handshake": False,
@@ -56,6 +59,8 @@ def get() -> dict[str, Any]:
             out[k].update(v)
         else:
             out[k] = v
+    if stored.get("priority_first") == "site" and "priority_order" not in stored:   # older two-way setting
+        out["priority_order"] = ["site", "role", "company"]
     return out
 
 
