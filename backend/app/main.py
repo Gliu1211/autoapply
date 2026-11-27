@@ -101,8 +101,12 @@ def state():
 
 @app.post("/api/autopilot")
 def set_autopilot(body: dict = Body(...)):
-    cfg.update({"autopilot": bool(body.get("enabled"))})
-    worker.kick(cycle=bool(body.get("enabled")))
+    enabled = bool(body.get("enabled"))
+    cfg.update({"autopilot": enabled})
+    if enabled:
+        worker.kick(cycle=True)
+    else:
+        worker.halt()
     return {"ok": True}
 
 

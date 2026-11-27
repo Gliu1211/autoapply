@@ -25,6 +25,7 @@ class Worker:
         self.want_cycle = False
         self.want_queue = False
         self.stopping = False    # set on shutdown: start no new applications
+        self.halts = 0           # bumped when autopilot is switched off: queue runs started earlier stop
 
     def start(self) -> None:
         if self.thread:
@@ -49,6 +50,14 @@ class Worker:
     def kick(self, cycle: bool = False) -> None:
         self.want_queue = True
         self.want_cycle = self.want_cycle or cycle
+        if self.loop and self.kick_event:
+            self.loop.call_soon_threadsafe(self.kick_event.set)
+
+    def halt(self) -> None:
+        """Autopilot was switched off: start no more applications from the queue. Ones already filling may finish."""
+        self.halts += 1
+        self.want_queue = False
+        self.want_cycle = False
         if self.loop and self.kick_event:
             self.loop.call_soon_threadsafe(self.kick_event.set)
 
@@ -93,8 +102,11 @@ async def _run_one(app_id: int) -> None:
         STATE["running"].remove(app_id)
 
 
-async def process_queue() -> None:
+async def process_queue(halts: int | None = None) -> None:
+    """Start queued applications until the queue is empty. Stops early if autopilot is switched off
+    after `halts` was read (by default, when this run starts)."""
     from .apply.browser import BrowserUnavailable
+    halts = worker.halts if halts is None else halts
     s = cfg.get()
     sem = asyncio.Semaphore(max(1, int(s["concurrency"])))
     tasks: set[asyncio.Task] = set()
@@ -103,6 +115,9 @@ async def process_queue() -> None:
     matching.unqueue_unwanted(s)
     while True:
         if worker.stopping:
+            break
+        if worker.halts != halts:
+            _set("idle", "Autopilot turned off")
             break
         if browser_down.is_set():
             _set("paused", "The browser couldn't start; trying again next round")
@@ -161,6 +176,7 @@ async def main_loop() -> None:
     STATE["last_cycle"] = db.kv_get("last_cycle")
     last_inbox = 0.0
     while not worker.stopping:
+        halts = worker.halts      # read before settings, so a switch-off during this round is never missed
         s = cfg.get()
         try:
             last = STATE["last_cycle"]
@@ -173,7 +189,7 @@ async def main_loop() -> None:
                 await cycle()
             if s["autopilot"] or worker.want_queue:
                 worker.want_queue = False
-                await process_queue()
+                await process_queue(halts)
             if inbox.configured() and time.monotonic() - last_inbox > 600:
                 last_inbox = time.monotonic()
                 _set("inbox", "Checking Gmail for replies")
