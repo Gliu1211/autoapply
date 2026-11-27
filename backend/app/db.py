@@ -112,6 +112,9 @@ def conn() -> sqlite3.Connection:
             cols = {r[1] for r in _conn.execute("PRAGMA table_info(applications)")}
             if "manual" not in cols:   # jobs you picked yourself bypass the autopilot site filter
                 _conn.execute("ALTER TABLE applications ADD COLUMN manual INTEGER DEFAULT 0")
+            jcols = {r[1] for r in _conn.execute("PRAGMA table_info(jobs)")}
+            if "role_rank" not in jcols:  # position of the highest-priority role the title matches (0 = first)
+                _conn.execute("ALTER TABLE jobs ADD COLUMN role_rank INTEGER")
         return _conn
 
 
@@ -142,6 +145,19 @@ def x(sql: str, params: Iterable[Any] = ()) -> int:
     with _lock:
         cur = conn().execute(sql, tuple(params))
         return cur.lastrowid or 0
+
+
+def many(sql: str, rows: Iterable[Iterable[Any]]) -> None:
+    """Run one write for many parameter rows in a single transaction."""
+    with _lock:
+        c = conn()
+        c.execute("BEGIN")
+        try:
+            c.executemany(sql, [tuple(r) for r in rows])
+            c.execute("COMMIT")
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
 
 
 def scalar(sql: str, params: Iterable[Any] = ()) -> Any:

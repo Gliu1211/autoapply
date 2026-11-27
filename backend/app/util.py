@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+from functools import lru_cache
 import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
@@ -321,3 +322,25 @@ def search_queries(roles: list[str], levels: list[str] | None = None, limit: int
     if levels and any("intern" in l.lower() for l in levels) and len(out) < limit:
         out.append(f"{out[0]} intern" if out else "intern")
     return out[:limit]
+
+
+# ---------------- role priority ----------------
+
+# For ranking only (jobs already passed the role filter): AI/ML roles also claim titles like "Software Engineer, AI".
+AI_EXTRAS = ("ai", "ml", "llm", "llms", "genai", "agentic", "ai agents", "ai/ml", "ml/ai")
+
+
+@lru_cache(maxsize=256)
+def rank_keywords(role: str) -> tuple[str, ...]:
+    kws = set(role_keywords([role]))
+    if "machine learning" in kws:
+        kws |= set(AI_EXTRAS)
+    return tuple(sorted(kws, key=len, reverse=True))
+
+
+def role_rank(title: str, roles: list[str]) -> int:
+    """Position of the highest-priority role this title matches (0 = first); len(roles) if none."""
+    for i, r in enumerate(roles):
+        if r.strip() and title_matches(title, list(rank_keywords(r.strip()))):
+            return i
+    return len(roles)

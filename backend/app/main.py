@@ -244,8 +244,12 @@ def jobs(status: str = "matched", q: str = "", limit: int = 200, offset: int = 0
         params += [f"%{q}%"] * 3
     w = " AND ".join(where) or "1=1"
     rows = db.q(f"SELECT id, company, title, location, remote, url, ats, source, score, score_reason, status, filter_reason, "
-                f"posted_at, salary FROM jobs WHERE {w} ORDER BY COALESCE(score,-1) DESC, COALESCE(posted_at,'') DESC "
-                f"LIMIT ? OFFSET ?", params + [limit, offset])
+                f"posted_at, salary, role_rank FROM jobs WHERE {w} ORDER BY {matching.order_sql(s)}, COALESCE(score,-1) DESC, "
+                f"COALESCE(posted_at,'') DESC LIMIT ? OFFSET ?", params + [limit, offset])
+    roles = prof.get()["looking_for"].get("roles") or []
+    for r in rows:
+        rk = r.get("role_rank")
+        r["role"] = roles[rk] if isinstance(rk, int) and rk < len(roles) else None
     counts = {r["status"]: r["n"] for r in db.q("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")}
     return {"jobs": rows, "counts": counts}
 
@@ -287,7 +291,10 @@ def get_profile():
 @app.put("/api/profile")
 def put_profile(body: dict = Body(...)):
     body.pop("resume", None)
+    before = prof.get()["looking_for"].get("roles")
     p = prof.save(body)
+    if p["looking_for"].get("roles") != before:
+        matching.update_role_ranks()     # role order is the apply-first order
     return {"profile": p, "missing": prof.missing_essentials(p)}
 
 

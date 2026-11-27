@@ -50,6 +50,7 @@ first**. Each filled form then shows up as *Ready for your OK* with a screenshot
 | Find jobs | Public boards of ~500 companies on Greenhouse, Lever, Ashby and Workable, Workday career sites (searched by your roles), the SimplifyJobs new-grad and internship feeds, and Handshake in your signed-in browser. New company boards found in the feeds are added automatically. |
 | Filter | Title vs. your roles (expanded: "Backend Engineer" also matches "Software Engineer"), level, US location / remote, posting age, companies to avoid. |
 | Score | Claude rates fit 0–100 against your profile and checks your standing instructions. Below your minimum match is skipped. |
+| Prioritize | Jobs go out in your order: roles first (Settings → *What to apply to first*, e.g. AI engineer, then Software Engineer, then Data Engineer), then sites (*Where to look*). You can flip which order wins. |
 | Pace | Daily cap, at most 3 applications per company per 30 days, at least 2 days apart (all adjustable). |
 | Apply | Opens the form in Chrome, reads every field, answers standard ones from your profile, reuses remembered answers, and has Claude write the rest from your profile and the posting. Uploads your resume (and a tailored cover letter PDF when there's a slot for one), submits, and confirms. |
 | Verify | Emailed security codes (Greenhouse) and Workday confirmation links are read from Gmail. |

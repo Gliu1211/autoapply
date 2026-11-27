@@ -106,7 +106,7 @@ async def process_queue() -> None:
             break
         rows = db.q(f"""SELECT a.id, a.approved, a.manual, j.company, j.ats FROM applications a JOIN jobs j ON j.id=a.job_id
                        WHERE a.status='queued'
-                       ORDER BY a.approved DESC, a.manual DESC, {matching.priority_sql(s, "j.ats")}, COALESCE(j.score,0) DESC, a.id LIMIT 50""")
+                       ORDER BY a.approved DESC, a.manual DESC, {matching.order_sql(s, "j.")}, COALESCE(j.score,0) DESC, a.id LIMIT 50""")
         rows = [r for r in rows if r["id"] not in passed and r["id"] not in STATE["running"]]
         if not rows:
             break

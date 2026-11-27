@@ -10,7 +10,7 @@ from . import profile as prof
 from . import settings as cfg
 from .llm import B, I, S, arr, obj
 from .sources import hydrate
-from .util import age_days, level_ok, location_ok, role_keywords, title_matches
+from .util import age_days, level_ok, location_ok, role_keywords, role_rank, title_matches
 
 log = logging.getLogger("autoapply.matching")
 
@@ -87,6 +87,22 @@ def title_keys(title: str | None) -> set[str]:
     return {k for k in keys if len(k) >= 6}
 
 
+def order_sql(s: dict | None = None, prefix: str = "") -> str:
+    """ORDER BY terms for "what to apply to first": role priority and site priority, in the order the user chose."""
+    s = s or cfg.get()
+    role = f"COALESCE({prefix}role_rank, 999)"
+    site = priority_sql(s, f"{prefix}ats")
+    return f"{site}, {role}" if s.get("priority_first") == "site" else f"{role}, {site}"
+
+
+def update_role_ranks() -> int:
+    """Recompute every open job's role rank (after the role list or its order changes)."""
+    roles = prof.get()["looking_for"].get("roles") or []
+    rows = db.q("SELECT id, title FROM jobs WHERE status IN ('new','candidate','scored','queued')")
+    db.many("UPDATE jobs SET role_rank=? WHERE id=?", [(role_rank(r["title"], roles), r["id"]) for r in rows])
+    return len(rows)
+
+
 def already_applying(company: str, title: str, exclude_job: int | None = None) -> bool:
     """Same company and same role already queued/sent from another site (e.g. Handshake and Greenhouse)."""
     ck, tk = norm_company(company), title_keys(title)
@@ -130,7 +146,8 @@ def prefilter() -> int:
         if reason:
             db.x("UPDATE jobs SET status='filtered', filter_reason=? WHERE id=?", (reason, j["id"]))
         else:
-            db.x("UPDATE jobs SET status='candidate' WHERE id=?", (j["id"],))
+            db.x("UPDATE jobs SET status='candidate', role_rank=? WHERE id=?",
+                 (role_rank(j["title"], lf.get("roles") or []), j["id"]))
             n += 1
     return n
 
@@ -176,7 +193,7 @@ def _heuristic_score(p: dict, j: dict) -> tuple[int, str]:
 
 async def score_candidates(limit: int = 60) -> int:
     p = prof.get()
-    jobs = db.q(f"SELECT * FROM jobs WHERE status='candidate' ORDER BY {priority_sql()}, COALESCE(posted_at,'') DESC LIMIT ?", (limit,))
+    jobs = db.q(f"SELECT * FROM jobs WHERE status='candidate' ORDER BY {order_sql()}, COALESCE(posted_at,'') DESC LIMIT ?", (limit,))
     if not jobs:
         return 0
     for j in jobs:
@@ -241,7 +258,7 @@ def queue_best(max_new: int) -> int:
     s = cfg.get()
     queued = 0
     rows = db.q(f"""SELECT id, company, title, score FROM jobs WHERE status='scored' AND score >= ?
-                    ORDER BY {priority_sql(s)}, score DESC, COALESCE(posted_at,'') DESC LIMIT 300""", (s["min_match"],))
+                    ORDER BY {order_sql(s)}, score DESC, COALESCE(posted_at,'') DESC LIMIT 300""", (s["min_match"],))
     for j in rows:
         if queued >= max_new:
             break

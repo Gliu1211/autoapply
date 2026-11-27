@@ -194,7 +194,7 @@ export default function Profile() {
             <h2>Looking for</h2>
             <p className="small muted" style={{ marginBottom: 12 }}>Decides which jobs you're matched with.</p>
             <div className="col" style={{ gap: 14 }}>
-              <Field label="Roles" hint="Press Enter after each. Titles are expanded, e.g. “Backend Engineer” also matches “Software Engineer”.">
+              <Field label="Roles" hint="Press Enter after each. Titles are expanded, e.g. “Backend Engineer” also matches “Software Engineer”. The order is your priority: reorder them in Settings → What to apply to first.">
                 <Chips value={lf.roles} onChange={(v) => set("looking_for", "roles", v)} placeholder="Add a role…" />
               </Field>
               <Field label="Level"><Pick value={lf.levels || []} options={LEVELS} onChange={(v) => set("looking_for", "levels", v)} /></Field>

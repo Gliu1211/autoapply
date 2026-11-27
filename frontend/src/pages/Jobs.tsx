@@ -39,6 +39,7 @@ export default function Jobs() {
                   <span className="company">{j.company}</span>
                   <a className="small" href={j.url} target="_blank" rel="noreferrer">{j.title}</a>
                   {j.score != null && <span className={`match ${j.score >= 65 ? "hi" : ""}`}>{j.score}% match</span>}
+                  {j.role && <span className={`badge ${j.role_rank === 0 ? "accent" : ""}`} title="The highest-priority role this title matches">#{j.role_rank + 1} {j.role}</span>}
                 </div>
                 <div className="small muted">{j.score_reason || j.filter_reason || ""}</div>
                 <div className="tiny faint">{[j.location, j.ats, j.source !== j.ats ? `via ${j.source}` : "", j.salary, j.posted_at ? `posted ${ago(j.posted_at)}` : ""].filter(Boolean).join(" · ")}</div>

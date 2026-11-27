@@ -19,8 +19,17 @@ export default function Settings() {
   const [board, setBoard] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [opening, setOpening] = useState(false);   // hooks must all run before the early "Loading…" return
+  const [roles, setRoles] = useState<string[] | null>(null);
+  const [newRole, setNewRole] = useState("");
   const load = () => api("/api/settings").then((r) => { setD(r); setGm((g) => ({ ...g, address: g.address || r.gmail.address })); });
   useEffect(() => { load(); }, []);
+  useEffect(() => { api("/api/profile").then((r) => setRoles(r.profile.looking_for.roles || [])).catch(() => setRoles([])); }, []);
+  const saveRoles = async (next: string[]) => {
+    const prev = roles;
+    setRoles(next);
+    try { await api("/api/profile", { method: "PUT", body: { looking_for: { roles: next } } }); }
+    catch (e: any) { setRoles(prev); toast(e.message); }
+  };
   if (!d) return <div className="page"><div className="empty">Loading…</div></div>;
   const s = d.settings;
   const put = async (patch: any) => {
@@ -99,6 +108,42 @@ export default function Settings() {
             </select>
           </Field>
         </div>
+      </section>
+
+      <section className="card col" style={{ gap: 12 }}>
+        <h2>What to apply to first</h2>
+        <p className="small muted" style={{ marginTop: -6 }}>Your roles, most wanted first. Each job counts under the highest role its title matches (an “ML Engineer” or “LLM Engineer” posting counts as an AI engineer job). Among jobs that clear your minimum match, higher roles are scored, queued and sent first. Jobs matching none of these are filtered out. Same list as Profile → Looking for.</p>
+        {roles === null ? <div className="small muted">Loading…</div> : roles.length === 0 ? <div className="small muted">No roles yet. Add one below or upload your resume in Profile.</div> : roles.map((r, i) => {
+          const move = (dir: number) => { const n = [...roles]; const [x] = n.splice(i, 1); n.splice(i + dir, 0, x); saveRoles(n); };
+          return (
+            <div className="row" key={r + i}>
+              <span className={`badge ${i === 0 ? "accent" : ""}`} style={{ minWidth: 34, justifyContent: "center" }}>{i + 1}</span>
+              <span className="small spacer"><b>{r}</b></span>
+              <button className="ghost" aria-label={`Move ${r} up`} disabled={i === 0} onClick={() => move(-1)}><Icon name="up" size={14} /></button>
+              <button className="ghost" aria-label={`Move ${r} down`} disabled={i === roles.length - 1} onClick={() => move(1)}><Icon name="down" size={14} /></button>
+              <button className="ghost" aria-label={`Remove ${r}`} onClick={() => saveRoles(roles.filter((_, k) => k !== i))}><Icon name="trash" size={14} /></button>
+            </div>
+          );
+        })}
+        {roles !== null && (
+          <form className="row" onSubmit={(e) => {
+            e.preventDefault();
+            const v = newRole.trim();
+            if (!v || roles.some((x) => x.toLowerCase() === v.toLowerCase())) return;
+            saveRoles([...roles, v]); setNewRole("");
+          }}>
+            <input placeholder="Add a role, e.g. AI Engineer" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
+            <button disabled={!newRole.trim()}><Icon name="plus" size={14} />Add</button>
+          </form>
+        )}
+        <Field label="When role order and site order disagree" hint={s.priority_first === "site"
+          ? "A Software Engineer job on Handshake goes before an AI engineer job on Workday."
+          : "An AI engineer job on Workday goes before a Software Engineer job on Handshake."}>
+          <select value={s.priority_first || "role"} onChange={(e) => put({ priority_first: e.target.value })}>
+            <option value="role">Role comes first, then site</option>
+            <option value="site">Site comes first, then role</option>
+          </select>
+        </Field>
       </section>
 
       <section className="card col" style={{ gap: 12 }}>

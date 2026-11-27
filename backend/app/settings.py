@@ -23,10 +23,12 @@ DEFAULTS: dict[str, Any] = {
     "headless": False,             # show the browser window (needed for Handshake/Workday sign-in)
     "browser": "",                 # "chrome" or "msedge"; "" = BROWSER_CHANNEL from .env (Chrome)
     "write_cover_letters": True,
-    "supported_only": True,
+    "supported_only": True,        # autopilot only applies on sites it handles well; the rest are for the extension
     "cost_mode": "balanced",       # quality = Opus for everything; balanced = Haiku scores jobs and sorts email; saver = + Sonnet writes answers
     # Where to apply first. Among jobs that clear min_match, earlier sites are scored, queued and sent first.
-    "source_priority": ["handshake", "greenhouse", "workday", "ashby", "workable", "lever"],        # autopilot only applies on sites it handles well; the rest are for the extension
+    "source_priority": ["handshake", "greenhouse", "workday", "ashby", "workable", "lever"],
+    # Which wins when the two orders disagree: "role" (your role order, then sites) or "site" (sites, then roles).
+    "priority_first": "role",
     "sources": {
         "greenhouse": True, "lever": False, "ashby": True, "workable": True, "workday": True,   # Lever: bot CAPTCHAs
         "simplify_feeds": True, "handshake": False,
