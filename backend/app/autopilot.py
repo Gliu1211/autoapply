@@ -24,6 +24,7 @@ class Worker:
         self.kick_event: asyncio.Event | None = None
         self.want_cycle = False
         self.want_queue = False
+        self.stopping = False    # set on shutdown: start no new applications
 
     def start(self) -> None:
         if self.thread:
@@ -65,6 +66,8 @@ async def cycle() -> None:
     counts = await discover()
     _set("matching", "Checking which jobs fit")
     matching.prefilter()
+    _set("matching", "Sorting companies by type")
+    await matching.refresh_company_types()
     # Score only as many as could go out soon: about 3 candidates per open slot, minus good matches already waiting.
     room = max(0, s["daily_cap"] - matching.sent_today()
                - (db.scalar("SELECT COUNT(*) FROM applications WHERE status IN ('queued','applying')") or 0))
@@ -97,7 +100,10 @@ async def process_queue() -> None:
     tasks: set[asyncio.Task] = set()
     passed: set[int] = set()
     browser_down = asyncio.Event()
+    matching.unqueue_unwanted(s)
     while True:
+        if worker.stopping:
+            break
         if browser_down.is_set():
             _set("paused", "The browser couldn't start; trying again next round")
             break
@@ -154,7 +160,7 @@ async def main_loop() -> None:
     db.x("UPDATE applications SET status='queued', status_detail='Restarted' WHERE status='applying'")
     STATE["last_cycle"] = db.kv_get("last_cycle")
     last_inbox = 0.0
-    while True:
+    while not worker.stopping:
         s = cfg.get()
         try:
             last = STATE["last_cycle"]

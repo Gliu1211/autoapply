@@ -40,6 +40,8 @@ export default function Jobs() {
                   <a className="small" href={j.url} target="_blank" rel="noreferrer">{j.title}</a>
                   {j.score != null && <span className={`match ${j.score >= 65 ? "hi" : ""}`}>{j.score}% match</span>}
                   {j.role && <span className={`badge ${j.role_rank === 0 ? "accent" : ""}`} title="The highest-priority role this title matches">#{j.role_rank + 1} {j.role}</span>}
+                  {j.company_types?.map((t: string) => <span className="badge" key={t} title="Company type">{t}</span>)}
+                  {j.off_type && <span className="badge" title="Settings → Company types is set to skip other companies. Apply still works.">Not your company type</span>}
                 </div>
                 <div className="small muted">{j.score_reason || j.filter_reason || ""}</div>
                 <div className="tiny faint">{[j.location, j.ats, j.source !== j.ats ? `via ${j.source}` : "", j.salary, j.posted_at ? `posted ${ago(j.posted_at)}` : ""].filter(Boolean).join(" · ")}</div>

@@ -40,6 +40,13 @@ def parse_dt(v) -> str | None:
         return None
 
 
+def norm_company(name: str | None) -> str:
+    """Comparable company key: lowercase, no suffixes (Inc, LLC, Technologies...) or punctuation."""
+    s = (name or "").lower()
+    s = re.sub(r"\b(inc|llc|ltd|corp|corporation|co|company|technologies|technology|labs|ai)\b\.?", "", s)
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
 def age_days(iso: str | None) -> float | None:
     if not iso:
         return None

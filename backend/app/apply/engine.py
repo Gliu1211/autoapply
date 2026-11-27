@@ -588,6 +588,11 @@ async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
         pass
 
 
+def _browser_closed(e: BaseException) -> bool:
+    """Playwright's "page/context/browser has been closed" (TargetClosedError isn't exported publicly)."""
+    return type(e).__name__ == "TargetClosedError" or "has been closed" in str(e)
+
+
 async def run_application(app_id: int, dry_run: bool = False) -> str:
     app = db.q1("SELECT * FROM applications WHERE id=?", (app_id,))
     job = db.q1("SELECT * FROM jobs WHERE id=?", (app["job_id"],)) if app else None
@@ -640,6 +645,20 @@ async def run_application(app_id: int, dry_run: bool = False) -> str:
         db.app_update(app_id, status="skipped", status_detail=str(e))
         db.x("UPDATE jobs SET status='closed' WHERE id=?", (job["id"],))
     except Exception as e:  # noqa: BLE001 — one bad page must not kill the queue
+        if _browser_closed(e):
+            # Not this application's fault (AutoApply shutting down, or the window was closed). Never resend blindly
+            # if it may already have gone out; otherwise put it back and let the caller pause the queue.
+            step = (db.q1("SELECT status_detail FROM applications WHERE id=?", (app_id,)) or {}).get("status_detail") or ""
+            if step.startswith(("Submitting", "Waiting for the verification code", "Got the code")):
+                status = "needs_you"
+                db.app_update(app_id, status="needs_you", status_detail="The browser closed while submitting this one. "
+                              "Check the employer site or your email before retrying.")
+            else:
+                status = "queued"
+                db.app_update(app_id, status="queued", status_detail="Waiting: the browser closed; will retry",
+                              attempts=app["attempts"] or 0)
+            db.event("error", f"Browser closed while applying to {job['company']}")
+            raise BrowserUnavailable("The browser window closed") from e
         log.exception("application %s failed", app_id)
         await run.shot("error")
         run.save()

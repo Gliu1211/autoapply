@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ago, api } from "../api";
 import { Field, Icon, Toggle, useToast } from "../ui";
 
@@ -12,6 +12,12 @@ const SOURCES: [string, string, string][] = [
   ["handshake", "Handshake", "Searches and applies in AutoApply's browser window with your Handshake sign-in. Sign in under Accounts first."],
 ];
 
+const DIMS: Record<string, [string, string]> = {
+  role: ["Role", "your roles above"],
+  company: ["Company type", "the types you turned on"],
+  site: ["Site", "the order under Where to look"],
+};
+
 export default function Settings() {
   const toast = useToast();
   const [d, setD] = useState<any>(null);
@@ -24,6 +30,13 @@ export default function Settings() {
   const load = () => api("/api/settings").then((r) => { setD(r); setGm((g) => ({ ...g, address: g.address || r.gmail.address })); });
   useEffect(() => { load(); }, []);
   useEffect(() => { api("/api/profile").then((r) => setRoles(r.profile.looking_for.roles || [])).catch(() => setRoles([])); }, []);
+  // While new companies are being sorted in the background, refresh the counts for a minute.
+  const polls = useRef(0);
+  useEffect(() => {
+    if (!d?.company_types?.pending || !(d.settings.company_types || []).length || polls.current >= 12) return;
+    const t = setTimeout(() => { polls.current += 1; load(); }, 5000);
+    return () => clearTimeout(t);
+  }, [d]);
   const saveRoles = async (next: string[]) => {
     const prev = roles;
     setRoles(next);
@@ -36,6 +49,11 @@ export default function Settings() {
     try { const r = await api("/api/settings", { method: "PUT", body: patch }); setD({ ...d, settings: r.settings }); }
     catch (e: any) { toast(e.message); }
   };
+  const putTypes = async (patch: any) => { polls.current = 0; await put(patch); load(); };   // reload: counts change
+  const ct: { types: { key: string; label: string; hint: string; jobs: number }[]; pending: number } = d.company_types || { types: [], pending: 0 };
+  const wanted: string[] = (s.company_types || []).filter((k: string) => ct.types.some((t) => t.key === k));
+  const dims: string[] = [...(s.priority_order || []).filter((k: string) => k in DIMS), ...Object.keys(DIMS)]
+    .filter((k, i, a) => a.indexOf(k) === i);
   const num = (k: string, label: string, hint?: string) => (
     <Field label={label} hint={hint}><input type="number" min={0} value={s[k]} onChange={(e) => put({ [k]: Number(e.target.value) })} /></Field>
   );
@@ -136,14 +154,57 @@ export default function Settings() {
             <button disabled={!newRole.trim()}><Icon name="plus" size={14} />Add</button>
           </form>
         )}
-        <Field label="When role order and site order disagree" hint={s.priority_first === "site"
-          ? "A Software Engineer job on Handshake goes before an AI engineer job on Workday."
-          : "An AI engineer job on Workday goes before a Software Engineer job on Handshake."}>
-          <select value={s.priority_first || "role"} onChange={(e) => put({ priority_first: e.target.value })}>
-            <option value="role">Role comes first, then site</option>
-            <option value="site">Site comes first, then role</option>
+
+        <div className="sep" style={{ margin: "2px 0" }} />
+        <div className="col" style={{ gap: 2 }}>
+          <b className="small">Company types</b>
+          <p className="small muted" style={{ margin: 0 }}>Turn on the kinds of company you want, most wanted first. Claude sorts each employer once from what it knows; a division counts as its parent (Waymo is big tech, GDIT is defense), and companies it doesn't recognize get no type.{ct.pending > 0 && wanted.length > 0 && <b> Sorting {ct.pending} companies…</b>}</p>
+        </div>
+        {[...wanted.map((k) => ct.types.find((t) => t.key === k)!).filter(Boolean), ...ct.types.filter((t) => !wanted.includes(t.key))].map((t) => {
+          const i = wanted.indexOf(t.key);
+          const on = i >= 0;
+          const move = (dir: number) => { const n = [...wanted]; const [x] = n.splice(i, 1); n.splice(i + dir, 0, x); putTypes({ company_types: n }); };
+          return (
+            <div className="row" key={t.key} style={{ alignItems: "flex-start", opacity: on ? 1 : 0.6 }}>
+              <span className={`badge ${i === 0 ? "accent" : ""}`} style={{ minWidth: 34, justifyContent: "center" }}>{on ? i + 1 : "–"}</span>
+              <Toggle on={on} onChange={(v) => putTypes({ company_types: v ? [...wanted, t.key] : wanted.filter((k) => k !== t.key) })} />
+              <div className="spacer">
+                <div className="small"><b>{t.label}</b><span className="muted"> · {t.jobs} open jobs</span></div>
+                <div className="tiny muted">{t.hint}</div>
+              </div>
+              {on && <>
+                <button className="ghost" aria-label={`Move ${t.label} up`} disabled={i === 0} onClick={() => move(-1)}><Icon name="up" size={14} /></button>
+                <button className="ghost" aria-label={`Move ${t.label} down`} disabled={i === wanted.length - 1} onClick={() => move(1)}><Icon name="down" size={14} /></button>
+              </>}
+            </div>
+          );
+        })}
+        <Field label="Companies of other types" hint={!wanted.length ? "Turn on a company type first." : s.company_types_only
+          ? "Autopilot skips them (and companies it couldn't sort). Jobs you pick yourself still go through."
+          : "Applied to after the types above, so nothing good is missed."}>
+          <select value={s.company_types_only ? "only" : "after"} disabled={!wanted.length} onChange={(e) => putTypes({ company_types_only: e.target.value === "only" })}>
+            <option value="after">Still apply to them, after these</option>
+            <option value="only">Skip them</option>
           </select>
         </Field>
+
+        <div className="sep" style={{ margin: "2px 0" }} />
+        <div className="col" style={{ gap: 2 }}>
+          <b className="small">When these disagree</b>
+          <p className="small muted" style={{ margin: 0 }}>The top one decides; the next ones only break ties. Now: {dims.map((k) => DIMS[k][0].toLowerCase()).join(", then ")}.{" "}
+            {dims[0] === "role" ? "Any AI engineer job goes before any Software Engineer job, wherever it is." : dims[0] === "company" ? "Any job at your first company type goes before the rest, whatever the role." : "Any job on your first site goes before the rest, whatever the role."}</p>
+        </div>
+        {dims.map((k, i) => {
+          const move = (dir: number) => { const n = [...dims]; const [x] = n.splice(i, 1); n.splice(i + dir, 0, x); put({ priority_order: n }); };
+          return (
+            <div className="row" key={k}>
+              <span className={`badge ${i === 0 ? "accent" : ""}`} style={{ minWidth: 34, justifyContent: "center" }}>{i + 1}</span>
+              <span className="small spacer"><b>{DIMS[k][0]}</b> <span className="muted">· {DIMS[k][1]}</span></span>
+              <button className="ghost" aria-label={`Move ${DIMS[k][0]} up`} disabled={i === 0} onClick={() => move(-1)}><Icon name="up" size={14} /></button>
+              <button className="ghost" aria-label={`Move ${DIMS[k][0]} down`} disabled={i === dims.length - 1} onClick={() => move(1)}><Icon name="down" size={14} /></button>
+            </div>
+          );
+        })}
       </section>
 
       <section className="card col" style={{ gap: 12 }}>

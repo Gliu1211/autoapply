@@ -10,15 +10,10 @@ from . import profile as prof
 from . import settings as cfg
 from .llm import B, I, S, arr, obj
 from .sources import hydrate
-from .util import age_days, level_ok, location_ok, role_keywords, role_rank, title_matches
+from . import companies
+from .util import age_days, level_ok, location_ok, norm_company, role_keywords, role_rank, title_matches
 
 log = logging.getLogger("autoapply.matching")
-
-
-def norm_company(name: str | None) -> str:
-    s = (name or "").lower()
-    s = re.sub(r"\b(inc|llc|ltd|corp|corporation|co|company|technologies|technology|labs|ai)\b\.?", "", s)
-    return re.sub(r"[^a-z0-9]", "", s)
 
 
 # ---------------- pacing ----------------
@@ -87,12 +82,74 @@ def title_keys(title: str | None) -> set[str]:
     return {k for k in keys if len(k) >= 6}
 
 
+DIMENSIONS = ("role", "company", "site")
+
+
+def priority_order(s: dict) -> list[str]:
+    order = [d for d in s.get("priority_order") or [] if d in DIMENSIONS]
+    return list(dict.fromkeys(order + list(DIMENSIONS)))
+
+
+def wanted_types(s: dict) -> list[str]:
+    return [t for t in dict.fromkeys(s.get("company_types") or []) if t in companies.TYPES]
+
+
 def order_sql(s: dict | None = None, prefix: str = "") -> str:
-    """ORDER BY terms for "what to apply to first": role priority and site priority, in the order the user chose."""
+    """ORDER BY terms for "what to apply to first": role, company type and site priority, in the order the user chose."""
     s = s or cfg.get()
-    role = f"COALESCE({prefix}role_rank, 999)"
-    site = priority_sql(s, f"{prefix}ats")
-    return f"{site}, {role}" if s.get("priority_first") == "site" else f"{role}, {site}"
+    n = len(wanted_types(s))
+    terms = {"role": f"COALESCE({prefix}role_rank, 999)",
+             "company": f"COALESCE({prefix}company_rank, {n})" if n else "",
+             "site": priority_sql(s, f"{prefix}ats")}
+    return ", ".join(t for t in (terms[d] for d in priority_order(s)) if t)
+
+
+def only_sql(s: dict, prefix: str = "") -> str:
+    """Extra WHERE condition when you only want your company types (companies not sorted yet wait)."""
+    n = len(wanted_types(s))
+    if not (n and s.get("company_types_only")):
+        return ""
+    return f" AND {prefix}company_rank IS NOT NULL AND {prefix}company_rank < {n}"
+
+
+def update_company_ranks(s: dict | None = None) -> int:
+    """Recompute every open job's company rank (after companies are sorted or your company types change)."""
+    s = s or cfg.get()
+    wanted = wanted_types(s)
+    known = companies.stored() if wanted else {}
+    cache: dict[str, int | None] = {}
+    vals = []
+    for r in db.q("SELECT id, company FROM jobs WHERE status IN ('new','candidate','scored','queued')"):
+        c = r["company"] or ""
+        if c not in cache:
+            cache[c] = companies.rank(companies.types_for(c, known), wanted) if wanted else 0
+        vals.append((cache[c], r["id"]))
+    db.many("UPDATE jobs SET company_rank=? WHERE id=?", vals)
+    return len(vals)
+
+
+def unqueue_unwanted(s: dict | None = None) -> int:
+    """With "only these company types" on, put queued autopilot picks at other companies back (they stay scored,
+    so turning it off brings them back). Jobs you picked or OK'd yourself stay."""
+    s = s or cfg.get()
+    cond = only_sql(s, "j.")
+    if not cond:
+        return 0
+    rows = db.q(f"""SELECT a.id, a.job_id FROM applications a JOIN jobs j ON j.id=a.job_id
+                    WHERE a.status='queued' AND a.approved=0 AND COALESCE(a.manual,0)=0
+                    AND j.company_rank IS NOT NULL AND NOT (1{cond})""")
+    for r in rows:
+        db.x("DELETE FROM applications WHERE id=?", (r["id"],))
+        db.x("UPDATE jobs SET status='scored' WHERE id=?", (r["job_id"],))
+    return len(rows)
+
+
+async def refresh_company_types() -> None:
+    """Sort any new companies by type, then re-rank jobs and drop unwanted ones from the queue."""
+    await companies.classify_pending()
+    s = cfg.get()
+    update_company_ranks(s)
+    unqueue_unwanted(s)
 
 
 def update_role_ranks() -> int:
@@ -192,8 +249,9 @@ def _heuristic_score(p: dict, j: dict) -> tuple[int, str]:
 
 
 async def score_candidates(limit: int = 60) -> int:
-    p = prof.get()
-    jobs = db.q(f"SELECT * FROM jobs WHERE status='candidate' ORDER BY {order_sql()}, COALESCE(posted_at,'') DESC LIMIT ?", (limit,))
+    p, s = prof.get(), cfg.get()
+    jobs = db.q(f"SELECT * FROM jobs WHERE status='candidate'{only_sql(s)} ORDER BY {order_sql(s)}, "
+                f"COALESCE(posted_at,'') DESC LIMIT ?", (limit,))
     if not jobs:
         return 0
     for j in jobs:
@@ -257,7 +315,7 @@ def create_application(job_id: int, status: str = "queued") -> int:
 def queue_best(max_new: int) -> int:
     s = cfg.get()
     queued = 0
-    rows = db.q(f"""SELECT id, company, title, score FROM jobs WHERE status='scored' AND score >= ?
+    rows = db.q(f"""SELECT id, company, title, score FROM jobs WHERE status='scored' AND score >= ?{only_sql(s)}
                     ORDER BY {order_sql(s)}, score DESC, COALESCE(posted_at,'') DESC LIMIT 300""", (s["min_match"],))
     for j in rows:
         if queued >= max_new:
