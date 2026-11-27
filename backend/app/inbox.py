@@ -138,23 +138,61 @@ def recent(days: int = 1, limit: int = 40, query: str = "") -> list[dict]:
 
 
 COMMON = {"verification", "security", "password", "application", "greenhouse", "workday", "thank", "please",
-          "submitted", "confirmation", "candidate", "account", "continue", "required"}
+          "submitted", "confirmation", "candidate", "account", "continue", "required", "expires", "minutes",
+          "verify", "passcode", "recruiting", "careers", "privacy", "hello", "regards"}
+_ANCHOR = re.compile(r"\b(code|passcode|otp)\b", re.I)
+_TOKEN = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9]{4,10})(?![A-Za-z0-9])")
+_WORDLIKE = re.compile(r"^([A-Z]?[a-z]+)$|^([A-Z][a-z]+){2,}$|^Mc[A-Z][a-z]+$")   # hello, Hello, DoorDash, McKinsey
+_used_codes: set[str] = set()   # message ids whose code was already handed out, so one email never fills two forms
 
 
-def extract_code(text: str) -> str | None:
-    for m in re.finditer(r"code", text, re.I):
+def _norm_company(name: str) -> str:
+    name = re.sub(r"[,.]?\s*\b(inc|llc|ltd|corp|corporation|co|company|plc|gmbh)\b\.?$", "", name.strip(), flags=re.I)
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def extract_code(text: str, length: int | None = None, avoid: str = "") -> str | None:
+    """The verification code in an email. `length`, when the form tells us, is the exact number of characters.
+    `avoid` is text whose words are never the code (the company name)."""
+    text = re.sub(r"https?://\S+|www\.\S+|\S+@\S+\.\w+", " ", text)   # ids inside links and addresses aren't codes
+    avoid_words = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", avoid)}
+
+    def ok(tok: str, standalone: bool) -> bool:
+        if length and len(tok) != length:
+            return False
+        if not length and len(tok) < 6:
+            return False
+        if tok.lower() in COMMON or tok.lower() in avoid_words:
+            return False
+        if tok.isdigit() or (any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok)):
+            return True
+        # letters only: a code on a line of its own may look like anything; inline, skip ordinary words and names
+        return standalone or not _WORDLIKE.match(tok)
+
+    # "123456 is your verification code"
+    for m in re.finditer(r"(?<![A-Za-z0-9])([A-Za-z0-9]{4,10})\s+is\s+your\b[^\n]{0,40}?\b(code|passcode|otp)\b", text, re.I):
+        if ok(m.group(1), False):
+            return m.group(1)
+    best: str | None = None
+    for m in _ANCHOR.finditer(text):
         window = text[m.end(): m.end() + 400]
-        for tok in re.findall(r"(?<![A-Za-z0-9])([A-Za-z0-9]{6,10})(?![A-Za-z0-9])", window):
-            if tok.lower() in COMMON or (tok.isalpha() and tok.islower()):
-                continue
-            if any(ch.isdigit() for ch in tok) or tok.isupper() or (not tok.islower() and not tok.istitle()):
-                return tok
-    return None
+        for line in window.splitlines():   # a code shown on its own line is the strongest sign
+            line = line.strip().strip(".:")
+            if _TOKEN.fullmatch(line) and ok(line, True):
+                return line
+        if best is None:
+            best = next((tok for tok in _TOKEN.findall(window) if ok(tok, False)), None)
+    return best
 
 
-async def wait_for_code(since: datetime, hints: list[str], timeout: int = 180) -> str | None:
+async def wait_for_code(since: datetime, company: str = "", hints: list[str] | None = None, length: int | None = None,
+                        timeout: int = 180) -> str | None:
+    """Poll Gmail for a verification code sent after `since`. Emails naming `company` win; otherwise one matching
+    `hints`. Each email's code is handed out once."""
     if not configured():
         return None
+    hints = [h.lower() for h in (hints or []) if h]
+    who = _norm_company(company)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -162,16 +200,21 @@ async def wait_for_code(since: datetime, hints: list[str], timeout: int = 180) -
         except (imaplib.IMAP4.error, OSError) as e:
             log.warning("imap: %s", e)
             msgs = []
-        for msg in msgs:
-            if msg["date"] < since - timedelta(minutes=2):
-                continue
+        fresh = [m for m in msgs if m["date"] >= since - timedelta(seconds=60) and m["msg_id"] not in _used_codes]
+        ours, other = [], []
+        for msg in fresh:
             hay = f"{msg['from']} {msg['subject']} {msg['body'][:3000]}".lower()
-            if "code" not in hay:
+            if not _ANCHOR.search(hay):
                 continue
-            if hints and not any(h and h.lower() in hay for h in hints):
-                continue
-            code = extract_code(f"{msg['subject']}\n{msg['body']}")
+            if who and who in hay:
+                ours.append(msg)
+            elif not hints or any(h in hay for h in hints):
+                other.append(msg)
+        for msg in ours + other:
+            code = extract_code(msg["body"], length, avoid=company) or extract_code(msg["subject"], length, avoid=company)
             if code:
+                _used_codes.add(msg["msg_id"])
+                log.info("verification code found in %r (%s)", msg["subject"][:80], "company match" if msg in ours else "generic match")
                 return code
         await asyncio.sleep(6)
     return None

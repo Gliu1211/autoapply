@@ -18,9 +18,40 @@ from ..util import detect_ats
 from . import fill as F
 from .answers import cover_letter, cover_letter_html, cover_letter_path, llm_answers, pick_option, rule_answer
 from .browser import BrowserUnavailable, browser
-from .dom import CODE_PROMPT_RE, EXTRACT_JS, NEXT_RE, STATE_JS, SUBMIT_RE, SUCCESS_RE
+from .dom import CODE_INPUTS_JS, CODE_PROMPT_RE, EXTRACT_JS, NEXT_RE, STATE_JS, SUBMIT_RE, SUCCESS_RE
 
 log = logging.getLogger("autoapply.engine")
+CODE_HINT_RE = (r"one[\s_-]?time|\botp\b|passcode|"
+                r"(security|verification|verify|confirmation|auth\w*|access)[\s_-]*(code|input|pin|digit|char)|\bcode\b")
+NOT_CODE_RE = (r"zip|postal|post[\s_-]?code|country|area[\s_-]?code|phone|dial|promo|coupon|discount|referr|invit|"
+               r"source|tracking|employee|requisition|\bjob\b")
+
+
+def pick_code_inputs(inputs: list[dict], before: set) -> list[dict]:
+    """Which input(s) want the emailed verification code: a row of one-character boxes, or one text box.
+    `before` holds the keys of inputs that were already visible before submitting; ones that appeared with the
+    code prompt are the strongest sign. Returns [] when it isn't clear, so a person types it instead of a guess."""
+    cands = []
+    for i in inputs:
+        if re.search(NOT_CODE_RE, i["hint"], re.I):
+            continue
+        named = i["ac"] == "one-time-code" or bool(re.search(CODE_HINT_RE, i["hint"], re.I))
+        cands.append({**i, "new": i["key"] not in before, "named": named})
+    boxes = [c for c in cands if c["maxlength"] and c["maxlength"] <= 2]
+    for pool in ([b for b in boxes if b["new"] and b["named"]], [b for b in boxes if b["named"]], [b for b in boxes if b["new"]]):
+        if 4 <= len(pool) <= 10:
+            return pool
+    wide = [c for c in cands if not (c["maxlength"] and c["maxlength"] <= 2)]
+    named_new = [c for c in wide if c["named"] and c["new"]]
+    named = [c for c in wide if c["named"]]
+    new = [c for c in wide if c["new"]]
+    if named_new:
+        return named_new[:1]
+    if len(named) == 1:
+        return named
+    if len(new) == 1:
+        return new
+    return []
 APPLY_LINK_RE = r"^(apply|apply now|apply for this (job|position|role)|apply to this job|i'?m interested|start (your )?application|apply on company (website|site)|apply externally)$"
 
 
@@ -341,23 +372,73 @@ class Run:
         return filled
 
     # ---------- submitting ----------
-    async def handle_code(self, since: datetime) -> None:
+    async def code_inputs(self) -> list[dict]:
+        out = []
+        for fr in self.frames():
+            try:
+                items = await fr.evaluate(CODE_INPUTS_JS)
+            except PWError:
+                continue
+            for i in items:
+                i["_frame"], i["key"] = fr, (i["doc"], i["id"])   # data-aa numbers restart in every frame and page
+                out.append(i)
+        return out
+
+    async def type_code(self, targets: list[dict], code: str) -> bool:
+        """Type the code and read it back. True only when the boxes hold exactly the code."""
+        want = re.sub(r"[\s-]", "", code).lower()
+        locs = [t["_frame"].locator(f'[data-aa="{t["id"]}"]').first for t in targets]
+
+        async def typed() -> str:
+            vals = []
+            for loc in locs:
+                try:
+                    vals.append(await loc.input_value(timeout=2000))
+                except (PWError, PWTimeout):
+                    vals.append("")
+            return re.sub(r"[\s-]", "", "".join(vals)).lower()
+
+        if len(targets) == 1:
+            await F.fill_text(targets[0]["_frame"], targets[0], code)
+        else:
+            for t, ch in zip(targets, code):
+                await F.fill_text(t["_frame"], t, ch)
+        if await typed() == want:
+            return True
+        # Widgets that move focus box to box on their own: clear them, then type into the first one like a person.
+        try:
+            for loc in locs:
+                await loc.fill("", timeout=3000)
+            await locs[0].click(timeout=3000)
+            await self.page.keyboard.type(code, delay=60)
+        except (PWError, PWTimeout):
+            return False
+        return await typed() == want
+
+    async def handle_code(self, since: datetime, before: set) -> None:
         self.log("Waiting for the verification code email")
-        hints = [self.job.get("company") or "", "greenhouse", "lever", "ashby", "workday", "workable", "security code", "verification"]
-        code = await inbox.wait_for_code(since, [h for h in hints if h], timeout=180)
+        targets: list[dict] = []
+        for _ in range(5):   # the boxes can render a moment after the prompt text
+            targets = pick_code_inputs(await self.code_inputs(), before)
+            if targets:
+                break
+            await self.page.wait_for_timeout(1000)
+        if not targets:
+            raise NeedsUser("The form wants an emailed verification code, but I couldn't tell which box it goes in. "
+                            "Type the code in the browser window.", wait=True)
+        if len(targets) > 1:
+            length = len(targets)
+        else:
+            m = targets[0]["maxlength"]
+            length = m if m and 4 <= m <= 10 else None
+        hints = ["greenhouse", "lever", "ashby", "workday", "workable", "security code", "verification"]
+        code = await inbox.wait_for_code(since, self.job.get("company") or "", hints, length=length, timeout=180)
         if not code:
             raise NeedsUser("The form wants an emailed verification code. Connect Gmail in Settings, or type the code in the browser window.", wait=True)
         self.log("Got the code from Gmail")
-        fields = [f for f in await self.extract() if f["kind"] == "text"]
-        singles = [f for f in fields if (f.get("maxlength") or 99) <= 2]
-        if len(singles) >= 4:
-            for f, ch in zip(singles, code):
-                await F.fill_text(f["_frame"], f, ch)
-        else:
-            target = next((f for f in fields if re.search(r"code|security|verif", f["question"], re.I)), fields[-1] if fields else None)
-            if not target:
-                raise NeedsUser("Couldn't find where to type the verification code.", wait=True)
-            await F.fill_text(target["_frame"], target, code)
+        if not await self.type_code(targets, code):
+            raise NeedsUser("I got the verification code from Gmail but it didn't go into the form correctly. "
+                            "Type it in the browser window.", wait=True)
         await self.page.wait_for_timeout(500)
         st = await self.state()
         b = self.find_button(st, SUBMIT_RE) or self.find_button(st, r"^(verify|confirm|continue)")
@@ -371,6 +452,7 @@ class Run:
         if not btn:
             return "no_button"
         t0 = datetime.now(timezone.utc)
+        inputs_before = {i["key"] for i in await self.code_inputs()}
         await self.shot("filled")
         self.log("Submitting")
         await self.click_button(btn)
@@ -389,7 +471,7 @@ class Run:
                 raise NeedsUser("A CAPTCHA appeared. Solve it in the browser window and press submit; I'll notice when it's sent.", wait=True)
             if not code_done and re.search(CODE_PROMPT_RE, st["text"], re.I) and not re.search(CODE_PROMPT_RE, before["text"], re.I):
                 code_done = True
-                await self.handle_code(t0)
+                await self.handle_code(t0, inputs_before)
                 continue
             if i >= 4 and (st["errors"] or st["invalid"]):
                 self.last_errors = st["errors"]
