@@ -105,7 +105,7 @@ export default function Settings() {
             </select>
           </Field>
         </div>
-        <div className="row"><Toggle on={s.write_cover_letters} onChange={(v) => put({ write_cover_letters: v })} /><span className="small">Write a tailored cover letter when a form has a cover letter upload</span></div>
+        <div className="row"><Toggle on={s.write_cover_letters} onChange={(v) => put({ write_cover_letters: v })} /><span className="small">Write a tailored cover letter when a form has a cover letter upload <span className="muted">(off: only when the form requires one)</span></span></div>
         <div className="row"><Toggle on={!s.headless} onChange={(v) => put({ headless: !v })} /><span className="small">Show the browser window <span className="muted">(needed to sign into Handshake, solve a CAPTCHA, or finish a form yourself)</span></span></div>
         <div className="grid2">
           <Field label="Cost" hint={({

@@ -278,7 +278,8 @@ STATE_JS = r"""
     if (!b.dataset.aab) b.dataset.aab = String(++window.__aabN);
     buttons.push({id: b.dataset.aab, text, type: (b.getAttribute('type') || '').toLowerCase(), auto: b.dataset.automationId || ''});
   }
-  const errSel = '[role=alert], [aria-live=assertive], .error, .errors, .field-error, .error-message, [class*="error-message" i], [class*="errorMessage" i], [data-automation-id="errorMessage"], [data-automation-id="inputAlert"], .application--error';
+  // Greenhouse's newer forms: <p id="{field}-error" class="helper-text helper-text--error">, present only while there's an error.
+  const errSel = '[role=alert], [aria-live=assertive], .error, .errors, .field-error, .error-message, [class*="error-message" i], [class*="errorMessage" i], [data-automation-id="errorMessage"], [data-automation-id="inputAlert"], .application--error, [id$="-error"], [id$="_error"], [class*="helper-text--error" i], [class*="error-text" i], [class*="input-error" i]';
   const errors = [...new Set([...document.querySelectorAll(errSel)].filter(isVisible).map(e => norm(e.innerText)).filter(t => t && t.length < 300))].slice(0, 15);
   const invalid = [...document.querySelectorAll('[aria-invalid=true]')].filter(isVisible).map(e => e.dataset.aa || '').filter(Boolean);
   const frames = [...document.querySelectorAll('iframe')].map(f => ({src: f.src || '', vis: isVisible(f), w: f.getBoundingClientRect().width, h: f.getBoundingClientRect().height}));
@@ -288,7 +289,8 @@ STATE_JS = r"""
   const pw = [...document.querySelectorAll('input[type=password]')].filter(isVisible).length;
   return {
     url: location.href, title: document.title,
-    text: norm(document.body ? document.body.innerText : '').slice(0, 8000),
+    // The whole page: on hosted boards the form (and any code prompt or thank-you under it) sits below a long description.
+    text: norm(document.body ? document.body.innerText : '').slice(0, 200000),
     buttons, errors, invalid, captchaChallenge, passwordFields: pw, inDialog: root !== document,
     cookieButtons: [...document.querySelectorAll('button, a[role=button], [role=button]')].filter(b => {
       if (!isVisible(b)) return false;

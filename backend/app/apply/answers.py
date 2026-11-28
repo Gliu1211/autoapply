@@ -202,6 +202,13 @@ def rule_answer(f: dict, p: dict, job: dict) -> tuple[str | list | None, str]:
     if not short and not is_choice:
         return None, ""
 
+    # Before the contact rules: "opt in to receive emails" is a yes/no question, not a request for your email address.
+    if is_choice and has(r"\bopt[- ]?in\b|marketing|newsletter|job alerts?|talent (community|network|pool)|"
+                         r"(occasional|promotional) (messages|e-?mails|communications|updates)"):
+        # Marketing and future-job mailing lists: decline unless you've said otherwise. It doesn't affect the application.
+        r = prof.recall(f["question"])
+        return (r, "remembered") if r else (["No", "No thanks", "I do not wish to receive", "Do not opt in", "Decline"], "rule")
+
     # identity / contact
     if re.search(r"given-name", meta) or has(r"\b(legal )?first name\b|given name"):
         return c["first_name"], "profile"
@@ -311,10 +318,14 @@ def rule_answer(f: dict, p: dict, job: dict) -> tuple[str | list | None, str]:
         return e.get("notice_period") or None, "profile"
     if has(r"salary|compensation expectation|desired (pay|compensation)|pay expectation|expected (base|compensation|pay)"):
         return e.get("salary_expectation") or None, "profile"
-    if has(r"text message|sms|ok to text|contact you (via|by) text|receive texts"):
+    if has(r"text message|sms|ok to text|contact you (via|by) text|receive texts|\btext you\b"):
         return _yn(e["ok_to_text"]) or None, "profile"
-    if has(r"felony|convicted|criminal (conviction|offense|record)"):
-        return _yn(e["felony"]) or None, "profile"
+    if has(r"felony|misdemeanor|convicted|conviction|criminal (conviction|offense|record|history|background)"):
+        # A legal statement about you: only your profile or your own earlier answer, never Claude's guess.
+        if _yn(e["felony"]):
+            return _yn(e["felony"]), "profile"
+        r = prof.recall(f["question"])
+        return (r, "remembered") if r else ("", "needs_user")
     if has(r"driver'?s licen[cs]e"):
         return _yn(e["drivers_license"]) or None, "profile"
     if has(r"terminated|dismissed|asked to resign|discharged|fired"):
@@ -381,6 +392,8 @@ Hard rules:
 - Use only facts from the candidate profile, remembered answers, and the job posting. Never invent employers, titles, degrees, dates, skills, numbers, awards, or experience. Never claim a skill the profile doesn't list.
 - Choice fields (select, radio, buttons, listbox, combobox with options, checkboxes): answer with option text copied exactly from the given options. Use `values` for multi-select fields, `value` for single.
 - Factual eligibility questions the profile doesn't answer (age, specific certifications, licenses, specific dates, ID numbers, referral names, availability for specific shifts, etc.): leave value "" and set needs_user=true if the field is required. Do not guess.
+- Legal attestations about the candidate (criminal history, convictions, past discipline, debarment, background-check disclosures) that the profile doesn't answer: value "" and needs_user=true. Never assume the answer, even the common one.
+- Opt-ins to marketing, newsletters, job alerts or future-opportunity messages: answer No (or leave unchecked) unless a remembered answer says otherwise.
 - "Years of experience with X": use a remembered answer if one matches; otherwise derive only from dated roles in the profile, counting internships, and if the profile has no dated professional use of X answer "0" (or the lowest option). Never inflate.
 - Open-ended questions (why this company, why this role, describe a project, tell us about yourself, additional information): write in first person, plain and specific, and answer the exact question asked. 60-150 words unless a character limit or the question implies shorter. No clichés, no buzzword strings, no em dashes, no exclamation marks.
 - No embellishment. Restate profile facts conservatively. Do not add motivations, processes (e.g. "test-first"), feedback loops, users, collaborators, adjectives about past systems (e.g. "fragile"), lessons learned, or authorship ("I built the benchmark") that the profile does not state. Never recast what a project does or why it exists to fit the posting.

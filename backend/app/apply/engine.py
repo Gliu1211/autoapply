@@ -177,6 +177,17 @@ class Run:
             self._cookies_done = True
             if await self.dismiss_cookies(st):
                 st = await self.page.evaluate(STATE_JS)
+        # A form embedded in an iframe: its text (code prompt, thank-you) and errors count too.
+        # Buttons stay top-page only, since clicks go through the top page.
+        for fr in self.frames()[1:]:
+            try:
+                sub = await fr.evaluate(STATE_JS)
+            except PWError:
+                continue
+            st["text"] += " " + sub["text"]
+            st["errors"] += sub["errors"]
+            st["invalid"] += sub["invalid"]
+            st["captchaChallenge"] = st["captchaChallenge"] or sub["captchaChallenge"]
         return st
 
     async def dismiss_cookies(self, st: dict) -> bool:
@@ -220,11 +231,14 @@ class Run:
         return hits[0] if hits else None
 
     # ---------- answers ----------
-    async def ensure_cover_letter(self):
+    async def ensure_cover_letter(self, required: bool = False):
+        """The tailored cover letter PDF. Written when cover letters are on, or when the form won't go without one."""
         if self.cover_path and self.cover_path.exists():
             return self.cover_path
-        if not (self.s["write_cover_letters"] and llm.available()):
+        if not ((self.s["write_cover_letters"] or required) and llm.available()):
             return None
+        if required and not self.s["write_cover_letters"]:
+            self.log("This form requires a cover letter; writing one")
         body = self.app.get("cover_letter") or await cover_letter(self.p, self.job)
         db.app_update(self.app_id, cover_letter=body)
         self.app["cover_letter"] = body
@@ -237,7 +251,8 @@ class Run:
         fr, k = f["_frame"], f["kind"]
         first = v[0] if isinstance(v, list) and v else v
         if k == "file":
-            path = prof.copy_resume_for_upload(self.p) if v in ("__RESUME__", "__AUTOFILL__") else await self.ensure_cover_letter()
+            path = (prof.copy_resume_for_upload(self.p) if v in ("__RESUME__", "__AUTOFILL__")
+                    else await self.ensure_cover_letter(required=bool(f.get("required"))))
             ok = bool(path) and await F.fill_file(fr, f, path)
             if ok and v == "__AUTOFILL__":
                 await self.wait_for_autofill()
@@ -463,13 +478,13 @@ class Run:
                 st = await self.state()
             except PWError:
                 continue
-            new_success = re.search(SUCCESS_RE, st["text"], re.I) and not re.search(SUCCESS_RE, before["text"], re.I)
+            new_success = _more(SUCCESS_RE, st["text"], before["text"])
             url_success = st["url"] != before["url"] and re.search(r"/(thanks|thank-you|thankyou|confirmation|submitted|success|applied)", st["url"], re.I)
             if new_success or url_success:
                 return "sent"
             if st["captchaChallenge"]:
                 raise NeedsUser("A CAPTCHA appeared. Solve it in the browser window and press submit; I'll notice when it's sent.", wait=True)
-            if not code_done and re.search(CODE_PROMPT_RE, st["text"], re.I) and not re.search(CODE_PROMPT_RE, before["text"], re.I):
+            if not code_done and _more(CODE_PROMPT_RE, st["text"], before["text"]):
                 code_done = True
                 await self.handle_code(t0, inputs_before)
                 continue
@@ -642,7 +657,7 @@ async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
     start = asyncio.get_running_loop().time()
     baseline = ""
     try:
-        baseline = (await page.evaluate("document.body.innerText"))[:5000]
+        baseline = await page.evaluate("document.body.innerText")
     except PWError:
         pass
     while asyncio.get_running_loop().time() - start < timeout_s:
@@ -650,11 +665,11 @@ async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
         if page.is_closed():
             return
         try:
-            text = (await page.evaluate("document.body.innerText"))[:8000]
+            text = await page.evaluate("document.body.innerText")   # whole page: the thank-you can sit below the form
             url = page.url
         except PWError:
             continue
-        if (re.search(SUCCESS_RE, text, re.I) and not re.search(SUCCESS_RE, baseline, re.I)) or \
+        if _more(SUCCESS_RE, text, baseline) or \
                 re.search(r"/(thanks|thank-you|confirmation|submitted)", url, re.I):
             db.app_update(app_id, status="sent", sent_at=db.now(), status_detail="You finished it in the browser")
             db.app_log(app_id, "Sent (finished by you in the browser)")
@@ -668,6 +683,11 @@ async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
         await page.close()
     except PWError:
         pass
+
+
+def _more(pattern: str, now: str, before: str) -> bool:
+    """The phrase shows up more often than before submitting: a new message, even if the posting already used the words."""
+    return len(re.findall(pattern, now, re.I)) > len(re.findall(pattern, before, re.I))
 
 
 def _browser_closed(e: BaseException) -> bool:
