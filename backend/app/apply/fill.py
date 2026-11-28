@@ -21,6 +21,23 @@ def _loc(frame: Frame, fid: str) -> Locator:
     return frame.locator(f'[data-aa="{fid}"]').first
 
 
+async def _scroll(loc: Locator) -> None:
+    """Bring a field into view. Playwright waits for it to hold still first; on a page whose layout keeps moving
+    (an animation, someone scrolling the window) that wait times out, so fall back to the page's own scrolling."""
+    try:
+        await loc.scroll_into_view_if_needed(timeout=1500)
+    except PWTimeout:
+        await loc.evaluate("e => e.scrollIntoView({block: 'center', inline: 'nearest'})")
+
+
+async def _click(loc: Locator, timeout: int = 3000) -> None:
+    """Click; if the element never holds still long enough for Playwright, click it where it is now."""
+    try:
+        await loc.click(timeout=timeout)
+    except PWTimeout:
+        await loc.click(force=True, timeout=timeout)
+
+
 async def _blur(loc: Locator) -> None:
     try:
         await loc.evaluate("e => { e.dispatchEvent(new Event('change', {bubbles: true})); e.blur(); }")
@@ -34,11 +51,11 @@ async def fill_text(frame: Frame, f: dict, value: str) -> bool:
     if f.get("maxlength") and len(value) > f["maxlength"]:
         value = value[: f["maxlength"]]
     try:
-        await loc.scroll_into_view_if_needed(timeout=3000)
+        await _scroll(loc)
         await loc.fill(value, timeout=5000)
     except (PWError, PWTimeout):
         try:
-            await loc.click(timeout=3000)
+            await _click(loc)
             await loc.press("Control+a")
             await loc.type(value, delay=8)
         except (PWError, PWTimeout):
@@ -133,7 +150,7 @@ async def fill_buttons(frame: Frame, f: dict, value) -> bool:
     if pick is None:
         return False
     try:
-        await frame.locator(f'[data-aa="{f["id"]}.{f["options"].index(pick)}"]').first.click(timeout=4000)
+        await _click(frame.locator(f'[data-aa="{f["id"]}.{f["options"].index(pick)}"]').first, 4000)
         return True
     except (PWError, PWTimeout):
         return False
@@ -165,8 +182,8 @@ async def probe_options(page: Page, frame: Frame, f: dict) -> list[str]:
     """Open a combobox/listbox just to read its options, then close it."""
     loc = _loc(frame, f["id"])
     try:
-        await loc.scroll_into_view_if_needed(timeout=3000)
-        await loc.click(timeout=3000)
+        await _scroll(loc)
+        await _click(loc)
         await page.wait_for_timeout(500)
         _, texts = await _visible_options(page, frame)
         await page.keyboard.press("Escape")
@@ -212,8 +229,8 @@ async def fill_combobox(page: Page, frame: Frame, f: dict, value, strict: bool) 
             continue
         tried.add(qtext)
         try:
-            await loc.scroll_into_view_if_needed(timeout=3000)
-            await loc.click(timeout=3000)
+            await _scroll(loc)
+            await _click(loc)
             try:
                 await loc.fill("", timeout=1500)
             except (PWError, PWTimeout):
@@ -225,7 +242,7 @@ async def fill_combobox(page: Page, frame: Frame, f: dict, value, strict: bool) 
             if pick is None and texts and not strict:
                 pick = texts[0]
             if pick is not None:
-                await opts.nth(texts.index(pick)).click(timeout=4000)
+                await _click(opts.nth(texts.index(pick)), 4000)
                 await page.wait_for_timeout(300)
                 return True
             await page.keyboard.press("Escape")
@@ -238,8 +255,8 @@ async def fill_listbox(page: Page, frame: Frame, f: dict, value) -> bool:
     """Workday-style dropdown buttons."""
     loc = _loc(frame, f["id"])
     try:
-        await loc.scroll_into_view_if_needed(timeout=3000)
-        await loc.click(timeout=4000)
+        await _scroll(loc)
+        await _click(loc, 4000)
         await page.wait_for_timeout(600)
         opts, texts = await _visible_options(page, frame)
         pick = pick_option(value, texts)
@@ -247,8 +264,8 @@ async def fill_listbox(page: Page, frame: Frame, f: dict, value) -> bool:
             await page.keyboard.press("Escape")
             return False
         target = opts.nth(texts.index(pick))
-        await target.scroll_into_view_if_needed(timeout=3000)
-        await target.click(timeout=4000)
+        await _scroll(target)
+        await _click(target, 4000)
         await page.wait_for_timeout(400)
         return True
     except (PWError, PWTimeout):
@@ -263,8 +280,8 @@ async def fill_multiselect(page: Page, frame: Frame, f: dict, value) -> bool:
         if not cand:
             continue
         try:
-            await loc.scroll_into_view_if_needed(timeout=3000)
-            await loc.click(timeout=3000)
+            await _scroll(loc)
+            await _click(loc)
             await loc.fill(str(cand)[:50], timeout=3000)
             await loc.press("Enter")
             await page.wait_for_timeout(1300)
@@ -272,13 +289,13 @@ async def fill_multiselect(page: Page, frame: Frame, f: dict, value) -> bool:
             pick = pick_option(cands, texts) or (texts[0] if texts else None)
             if pick is None:
                 continue
-            await opts.nth(texts.index(pick)).click(timeout=4000)
+            await _click(opts.nth(texts.index(pick)), 4000)
             await page.wait_for_timeout(800)
             # nested category (e.g. "Job Board" > "LinkedIn")
             opts2, texts2 = await _visible_options(page, frame)
             if texts2 and texts2 != texts:
                 pick2 = pick_option(cands, texts2) or texts2[0]
-                await opts2.nth(texts2.index(pick2)).click(timeout=4000)
+                await _click(opts2.nth(texts2.index(pick2)), 4000)
                 await page.wait_for_timeout(500)
             await page.keyboard.press("Escape")
             return True
@@ -321,7 +338,7 @@ async def fill_date(frame: Frame, f: dict, value: str) -> bool:
             continue
         loc = frame.locator(f'[data-aa="{f["id"]}.{i}"]').first
         try:
-            await loc.click(timeout=3000)
+            await _click(loc)
             await loc.type(v, delay=40)
         except (PWError, PWTimeout):
             ok = False
