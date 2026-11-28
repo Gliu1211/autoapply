@@ -151,6 +151,52 @@ def degree_candidates(deg: str) -> list[str]:
         return ["Associate's Degree", "Associate's", deg]
     return [deg]
 
+# Yes/no questions backed by one profile field. Your answer to any wording (in Needs you, or typed in the browser)
+# fills the field, so every other wording is covered from then on.
+OVER18_Q = r"18 years|at least 18|over 18|over the age|of legal age|age of 18"
+FELONY_Q = r"felony|misdemeanor|convicted|conviction|criminal (conviction|offense|record|history|background)"
+LICENSE_Q = r"driver'?s licen[cs]e"
+DISMISSED_Q = r"terminated|dismissed|asked to resign|discharged|fired"
+TOBACCO_Q = r"tobacco|nicotine"
+NONCOMPETE_Q = r"non-?compete|non-?solicit"
+PROFILE_YES_NO = [(FELONY_Q, "felony"), (DISMISSED_Q, "dismissed"), (LICENSE_Q, "drivers_license"),
+                  (TOBACCO_Q, "tobacco"), (NONCOMPETE_Q, "non_compete"), (OVER18_Q, "over_18")]
+# Reversed wording ("a clean record?", "tobacco-free?"): the profile's Yes/No would mean the opposite.
+INVERTED_Q = r"\b(clean|free (of|from)|non-?smok\w*|non-?users?|not been|never been|no (criminal|record|convictions?))\b|\w-free\b"
+
+
+def to_yes_no(answer) -> str:
+    """"No, I have not been convicted..." -> "No"; "" when the answer isn't a plain yes or no."""
+    a = str(answer or "").strip().lower()
+    if re.match(r"(n/?a|not applicable|prefer not|decline)\b", a):
+        return ""
+    if re.match(r"(yes|y|true|i (do|am|have)(?! not| never))\b", a):
+        return "Yes"
+    if re.match(r"(no|n|false|none|never|i (do not|don't|am not|have not|haven't|have never))\b", a):
+        return "No"
+    return ""
+
+
+def profile_field_for(question: str) -> str | None:
+    q = (question or "").lower()
+    if re.search(INVERTED_Q, q):
+        return None
+    return next((field for pat, field in PROFILE_YES_NO if re.search(pat, q)), None)
+
+
+def remember_answer(question: str, answer) -> None:
+    """Keep your answer to a question for next time. A yes/no one backed by a profile field also fills that field
+    (if it's empty), so differently worded versions of the question get the same answer."""
+    prof.remember(question, str(answer))
+    el = prof.get()["eligibility"]
+    field, yn = profile_field_for(question), to_yes_no(answer)
+    if field and yn and not el.get(field):
+        prof.save({"eligibility": {field: yn}})
+    elif re.search(r"salary|compensation|desired pay|pay expectation", (question or "").lower()) \
+            and str(answer).strip() and not el.get("salary_expectation"):
+        prof.save({"eligibility": {"salary_expectation": str(answer).strip()}})
+
+
 def _yn(v: str) -> str:
     v = (v or "").strip()
     return v if v in ("Yes", "No") else ""
@@ -308,7 +354,7 @@ def rule_answer(f: dict, p: dict, job: dict) -> tuple[str | list | None, str]:
         return _yn(e["willing_relocate"]) or None, "profile"
     if has(r"hybrid|on-?site|in[- ]office|in person|commut") and is_choice and set(_n(o) for o in f.get("options", [])) <= {"yes", "no"}:
         return _yn(e["open_hybrid_onsite"]) or None, "profile"
-    if has(r"18 years|at least 18|over 18|over the age|of legal age|age of 18"):
+    if has(OVER18_Q):
         return _yn(e.get("over_18", "")) or None, "profile"
     if has(r"^(total )?years of (professional |relevant |work )?experience|how many years of (professional |work )?experience do you have\??$"):
         return str(e["years_experience"]) if e["years_experience"] != "" else None, "profile"
@@ -320,19 +366,19 @@ def rule_answer(f: dict, p: dict, job: dict) -> tuple[str | list | None, str]:
         return e.get("salary_expectation") or None, "profile"
     if has(r"text message|sms|ok to text|contact you (via|by) text|receive texts|\btext you\b"):
         return _yn(e["ok_to_text"]) or None, "profile"
-    if has(r"felony|misdemeanor|convicted|conviction|criminal (conviction|offense|record|history|background)"):
+    if has(FELONY_Q):
         # A legal statement about you: only your profile or your own earlier answer, never Claude's guess.
-        if _yn(e["felony"]):
+        if _yn(e["felony"]) and not has(INVERTED_Q):
             return _yn(e["felony"]), "profile"
         r = prof.recall(f["question"])
         return (r, "remembered") if r else ("", "needs_user")
-    if has(r"driver'?s licen[cs]e"):
+    if has(LICENSE_Q) and not has(INVERTED_Q):
         return _yn(e["drivers_license"]) or None, "profile"
-    if has(r"terminated|dismissed|asked to resign|discharged|fired"):
+    if has(DISMISSED_Q) and not has(INVERTED_Q):
         return _yn(e["dismissed"]) or None, "profile"
-    if has(r"tobacco|nicotine"):
+    if has(TOBACCO_Q) and not has(INVERTED_Q):
         return _yn(e["tobacco"]) or None, "profile"
-    if has(r"non-?compete|non-?solicit"):
+    if has(NONCOMPETE_Q) and not has(INVERTED_Q):
         return _yn(e["non_compete"]) or None, "profile"
     if has(r"security clearance|active clearance|hold a clearance|clearance level"):
         cl = e.get("clearance") or ""

@@ -32,7 +32,7 @@ function PendingForm({ app, pending, onDone }: { app: number; pending: Pending[]
   };
   return (
     <div className="entry" style={{ borderColor: "var(--warn)" }}>
-      <div className="small"><b>Answer these once</b> <span className="muted">and they'll be reused on every future form.</span></div>
+      <div className="small"><b>Answer these once</b> <span className="muted">and they'll be reused on every future form. Or finish it yourself in the browser window: what you put in these boxes there is remembered too.</span></div>
       {pending.map((p) => (
         <label className="f" key={p.question}>
           <span className="l">{p.question}</span>

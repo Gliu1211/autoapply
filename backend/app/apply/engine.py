@@ -16,7 +16,8 @@ from .. import settings as cfg
 from ..config import SHOTS
 from ..util import detect_ats
 from . import fill as F
-from .answers import cover_letter, cover_letter_html, cover_letter_path, llm_answers, pick_option, rule_answer
+from .answers import (cover_letter, cover_letter_html, cover_letter_path, llm_answers, pick_option, remember_answer,
+                      rule_answer)
 from .browser import BrowserUnavailable, browser
 from .dom import CODE_INPUTS_JS, CODE_PROMPT_RE, EXTRACT_JS, NEXT_RE, STATE_JS, SUBMIT_RE, SUCCESS_RE
 
@@ -652,16 +653,46 @@ async def generic_apply(run: Run) -> tuple[str, str]:
     return await run.finish_single_page()
 
 
+async def _read_fields(page: Page) -> list[dict]:
+    """Every form field on the page (all frames) with what it currently holds."""
+    out = []
+    for fr in page.frames:
+        if re.search(r"recaptcha|hcaptcha|google|doubleclick|facebook|stripe|cloudflare|youtube|vimeo", fr.url or ""):
+            continue
+        try:
+            out += await fr.evaluate(EXTRACT_JS)
+        except PWError:
+            continue
+    return out
+
+
+def _keep_your_answers(app_id: int, questions: dict[str, str], typed: dict[str, str]) -> None:
+    """Answers you typed in the browser: remembered for next time, and shown as yours on this application."""
+    for k, v in typed.items():
+        remember_answer(questions[k], v)
+    row = db.q1("SELECT answers FROM applications WHERE id=?", (app_id,))
+    by_key = {prof.qkey(a["question"]): a for a in (row["answers"] if row else [])}
+    for k, v in typed.items():
+        by_key[k] = {**by_key.get(k, {}), "question": questions[k], "answer": v, "value": v, "source": "you", "ok": True}
+    db.app_update(app_id, answers=list(by_key.values()))
+    db.app_log(app_id, f"Remembered {len(typed)} answer{'s' if len(typed) != 1 else ''} you gave in the browser")
+
+
 async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
-    """After handing over, watch the tab: if the person submits it, mark it sent."""
+    """After handing over, watch the tab: if the person submits it, mark it sent and remember what they filled in
+    for the questions AutoApply couldn't answer."""
     start = asyncio.get_running_loop().time()
     baseline = ""
     try:
         baseline = await page.evaluate("document.body.innerText")
     except PWError:
         pass
+    row = db.q1("SELECT pending_questions FROM applications WHERE id=?", (app_id,))
+    questions = {prof.qkey(q["question"]): q["question"] for q in ((row or {}).get("pending_questions") or [])
+                 if isinstance(q, dict) and q.get("question")}
+    typed: dict[str, str] = {}   # latest value seen in each of those boxes; the form may be gone once it's sent
     while asyncio.get_running_loop().time() - start < timeout_s:
-        await asyncio.sleep(4)
+        await asyncio.sleep(2)
         if page.is_closed():
             return
         try:
@@ -669,8 +700,22 @@ async def watch_for_user(page: Page, app_id: int, timeout_s: int = 900) -> None:
             url = page.url
         except PWError:
             continue
-        if _more(SUCCESS_RE, text, baseline) or \
-                re.search(r"/(thanks|thank-you|confirmation|submitted)", url, re.I):
+        sent = _more(SUCCESS_RE, text, baseline) or re.search(r"/(thanks|thank-you|confirmation|submitted)", url, re.I)
+        if questions and not sent:
+            try:
+                for f in await _read_fields(page):
+                    k = prof.qkey(f["question"])
+                    cur = str(f.get("current") or "").strip()
+                    if k in questions and f["kind"] != "file":
+                        if cur:
+                            typed[k] = cur
+                        else:
+                            typed.pop(k, None)     # cleared again: don't keep an answer you took back
+            except PWError:
+                pass
+        if sent:
+            if typed:
+                _keep_your_answers(app_id, questions, typed)
             db.app_update(app_id, status="sent", sent_at=db.now(), status_detail="You finished it in the browser")
             db.app_log(app_id, "Sent (finished by you in the browser)")
             row = db.q1("SELECT job_id FROM applications WHERE id=?", (app_id,))
