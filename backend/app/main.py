@@ -19,6 +19,7 @@ from .config import FRONTEND_DIST, SHOTS
 from .extension_api import router as ext_router
 from .sources import add_job_url
 from .sources.boards import add_board, seed_boards
+from .apply.answers import remember_answer
 from .util import detect_ats
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -202,18 +203,13 @@ def mark_sent(app_id: int):
 
 @app.post("/api/applications/{app_id}/answers")
 def answer_pending(app_id: int, body: dict = Body(...)):
-    p = prof.get()
     for q, a in (body.get("answers") or {}).items():
         a = str(a).strip()
         if not a:
             continue
-        prof.remember(q, a)
-        # Questions worded many ways map onto one profile field, so one answer covers them all.
-        low = q.lower()
-        if re.search(r"salary|compensation|desired pay|pay expectation", low) and not p["eligibility"].get("salary_expectation"):
-            prof.save({"eligibility": {"salary_expectation": a}})
-        elif re.search(r"18 years|at least 18|over 18|legal age", low) and a in ("Yes", "No"):
-            prof.save({"eligibility": {"over_18": a}})
+        # Remembered for next time; questions worded many ways (criminal history, salary, over 18...) also fill
+        # the one profile field behind them, so one answer covers every wording.
+        remember_answer(q, a)
     return _requeue(app_id, pending_questions=[])
 
 
